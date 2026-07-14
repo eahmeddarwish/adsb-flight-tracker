@@ -1,0 +1,31 @@
+{
+ "aircraft":[
+  {
+   "hex":"A1B2C3",
+   "flight":"KAC123",
+   "lat":29.37,
+   "lon":47.98,
+   "alt":32000,
+   "speed":430,
+   "track":120
+  },
+  {
+   "hex":"D4E5F6",
+   "flight":"UAE201",
+   "lat":29.45,
+   "lon":48.10,
+   "alt":36000,
+   "speed":460,
+   "track":300
+  },
+  {
+   "hex":"G7H8I9",
+   "flight":"QTR900",
+   "lat":29.20,
+   "lon":47.80,
+   "alt":38000,
+   "speed":480,
+   "track":45
+  }
+ ]
+}

@@ -1,0 +1,978 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>ADS-B RADAR — Kuwait ACC</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Share+Tech+Mono&family=Rajdhani:wght@300;400;600;700&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"/>
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+<style>
+  :root {
+    --radar-green: #00ff88;
+    --radar-dim: #00aa55;
+    --radar-glow: rgba(0,255,136,0.15);
+    --bg-deep: #030d06;
+    --bg-panel: #060f08;
+    --bg-card: #0a1a0d;
+    --border: rgba(0,255,136,0.2);
+    --border-bright: rgba(0,255,136,0.5);
+    --alert-red: #ff3355;
+    --alert-yellow: #ffcc00;
+    --text-dim: rgba(0,255,136,0.5);
+  }
+
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+
+  body {
+    background: var(--bg-deep);
+    color: var(--radar-green);
+    font-family: 'Share Tech Mono', monospace;
+    height: 100vh;
+    overflow: hidden;
+    display: flex;
+    flex-direction: column;
+  }
+
+  /* ── SCANLINE OVERLAY ── */
+  body::before {
+    content: '';
+    position: fixed;
+    inset: 0;
+    background: repeating-linear-gradient(
+      0deg,
+      transparent,
+      transparent 2px,
+      rgba(0,0,0,0.08) 2px,
+      rgba(0,0,0,0.08) 4px
+    );
+    pointer-events: none;
+    z-index: 9999;
+  }
+
+  /* ── HEADER ── */
+  header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 8px 20px;
+    border-bottom: 1px solid var(--border);
+    background: var(--bg-panel);
+    flex-shrink: 0;
+  }
+
+  .header-left { display: flex; align-items: center; gap: 16px; }
+
+  .logo {
+    font-family: 'Rajdhani', sans-serif;
+    font-size: 22px;
+    font-weight: 700;
+    letter-spacing: 4px;
+    text-shadow: 0 0 20px var(--radar-green);
+  }
+
+  .logo span { color: var(--text-dim); font-weight: 300; }
+
+  .status-pill {
+    display: flex; align-items: center; gap: 6px;
+    font-size: 11px; letter-spacing: 2px;
+    padding: 3px 10px;
+    border: 1px solid var(--border);
+    background: var(--radar-glow);
+  }
+
+  .dot-live {
+    width: 7px; height: 7px; border-radius: 50%;
+    background: var(--radar-green);
+    box-shadow: 0 0 8px var(--radar-green);
+    animation: pulse-dot 1.2s ease-in-out infinite;
+  }
+
+  @keyframes pulse-dot {
+    0%,100% { opacity: 1; }
+    50% { opacity: 0.3; }
+  }
+
+  .header-stats {
+    display: flex; gap: 24px;
+    font-size: 11px; letter-spacing: 1px;
+  }
+
+  .hstat { display: flex; flex-direction: column; align-items: flex-end; }
+  .hstat-val { font-size: 20px; font-weight: 700; line-height: 1; text-shadow: 0 0 12px var(--radar-green); }
+  .hstat-label { color: var(--text-dim); font-size: 10px; letter-spacing: 2px; }
+
+  .utc-clock {
+    font-size: 24px;
+    letter-spacing: 3px;
+    text-shadow: 0 0 15px var(--radar-green);
+    border-left: 1px solid var(--border);
+    padding-left: 20px;
+  }
+
+  /* ── MAIN LAYOUT ── */
+  .main {
+    display: flex;
+    flex: 1;
+    overflow: hidden;
+  }
+
+  /* ── LEFT PANEL ── */
+  .left-panel {
+    width: 280px;
+    flex-shrink: 0;
+    background: var(--bg-panel);
+    border-right: 1px solid var(--border);
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+  }
+
+  .panel-title {
+    padding: 10px 16px;
+    font-size: 10px;
+    letter-spacing: 3px;
+    color: var(--text-dim);
+    border-bottom: 1px solid var(--border);
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+  }
+
+  .panel-title span { color: var(--radar-green); }
+
+  /* flight list */
+  .flight-list {
+    flex: 1;
+    overflow-y: auto;
+    padding: 4px 0;
+  }
+
+  .flight-list::-webkit-scrollbar { width: 3px; }
+  .flight-list::-webkit-scrollbar-track { background: transparent; }
+  .flight-list::-webkit-scrollbar-thumb { background: var(--border); }
+
+  .flight-item {
+    padding: 8px 16px;
+    border-bottom: 1px solid rgba(0,255,136,0.05);
+    cursor: pointer;
+    transition: background 0.15s;
+    display: grid;
+    grid-template-columns: 1fr auto;
+    gap: 4px;
+    align-items: center;
+  }
+
+  .flight-item:hover { background: var(--radar-glow); }
+  .flight-item.selected { background: rgba(0,255,136,0.1); border-left: 2px solid var(--radar-green); }
+
+  .fi-callsign {
+    font-size: 14px;
+    font-weight: 700;
+    letter-spacing: 1px;
+    text-shadow: 0 0 8px var(--radar-green);
+  }
+
+  .fi-hex { font-size: 9px; color: var(--text-dim); letter-spacing: 1px; }
+
+  .fi-alt {
+    font-size: 12px;
+    text-align: right;
+    line-height: 1.2;
+  }
+
+  .fi-alt-val { color: var(--radar-green); }
+  .fi-speed { font-size: 10px; color: var(--text-dim); }
+
+  .fi-track {
+    grid-column: 1 / -1;
+    display: flex;
+    gap: 12px;
+    font-size: 9px;
+    color: var(--text-dim);
+    margin-top: 2px;
+  }
+
+  /* ── MAP AREA ── */
+  .map-wrapper {
+    flex: 1;
+    position: relative;
+    overflow: hidden;
+  }
+
+  #map {
+    width: 100%;
+    height: 100%;
+    background: #020a04 !important;
+  }
+
+  /* Custom Leaflet dark tiles override */
+  .leaflet-container { background: #020a04; }
+
+  /* MAP OVERLAY ELEMENTS */
+  .map-overlay-tl, .map-overlay-tr, .map-overlay-bl, .map-overlay-br {
+    position: absolute;
+    z-index: 1000;
+    pointer-events: none;
+    font-size: 9px;
+    letter-spacing: 2px;
+    color: var(--text-dim);
+  }
+  .map-overlay-tl { top: 12px; left: 12px; }
+  .map-overlay-tr { top: 12px; right: 12px; text-align: right; }
+  .map-overlay-bl { bottom: 30px; left: 12px; }
+  .map-overlay-br { bottom: 30px; right: 12px; text-align: right; }
+
+  /* SWEEP ANIMATION */
+  .radar-sweep {
+    position: absolute;
+    top: 50%; left: 50%;
+    width: 1px; height: 1px;
+    z-index: 999;
+    pointer-events: none;
+    display: none; /* hidden for map mode */
+  }
+
+  /* ── RIGHT PANEL ── */
+  .right-panel {
+    width: 260px;
+    flex-shrink: 0;
+    background: var(--bg-panel);
+    border-left: 1px solid var(--border);
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+  }
+
+  /* SELECTED AIRCRAFT DETAIL */
+  .ac-detail {
+    padding: 14px 16px;
+    border-bottom: 1px solid var(--border);
+    flex-shrink: 0;
+  }
+
+  .ac-detail-callsign {
+    font-family: 'Rajdhani', sans-serif;
+    font-size: 28px;
+    font-weight: 700;
+    letter-spacing: 3px;
+    text-shadow: 0 0 20px var(--radar-green);
+    line-height: 1;
+    margin-bottom: 4px;
+  }
+
+  .ac-detail-hex {
+    font-size: 10px;
+    color: var(--text-dim);
+    letter-spacing: 2px;
+    margin-bottom: 12px;
+  }
+
+  .data-grid {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 8px;
+  }
+
+  .data-cell {
+    background: var(--bg-card);
+    border: 1px solid var(--border);
+    padding: 8px 10px;
+  }
+
+  .dc-label {
+    font-size: 8px;
+    color: var(--text-dim);
+    letter-spacing: 2px;
+    margin-bottom: 3px;
+  }
+
+  .dc-value {
+    font-size: 16px;
+    font-weight: 700;
+    text-shadow: 0 0 8px var(--radar-green);
+    line-height: 1;
+  }
+
+  .dc-unit { font-size: 10px; color: var(--text-dim); }
+
+  /* HEADING COMPASS */
+  .compass-wrap {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    padding: 14px 16px;
+    border-bottom: 1px solid var(--border);
+    flex-shrink: 0;
+  }
+
+  .compass-label {
+    font-size: 9px;
+    letter-spacing: 3px;
+    color: var(--text-dim);
+    margin-bottom: 8px;
+  }
+
+  .compass {
+    width: 90px; height: 90px;
+    position: relative;
+  }
+
+  .compass svg { width: 100%; height: 100%; }
+
+  /* LOG */
+  .log-section { flex: 1; display: flex; flex-direction: column; overflow: hidden; }
+
+  .log-entries {
+    flex: 1;
+    overflow-y: auto;
+    padding: 6px 0;
+  }
+
+  .log-entries::-webkit-scrollbar { width: 3px; }
+  .log-entries::-webkit-scrollbar-thumb { background: var(--border); }
+
+  .log-entry {
+    padding: 5px 16px;
+    font-size: 10px;
+    border-bottom: 1px solid rgba(0,255,136,0.04);
+    display: flex;
+    gap: 8px;
+    color: var(--text-dim);
+  }
+
+  .log-time { color: var(--radar-green); flex-shrink: 0; }
+  .log-msg { flex: 1; }
+  .log-entry.alert { color: var(--alert-yellow); }
+  .log-entry.alert .log-time { color: var(--alert-yellow); }
+
+  /* FOOTER */
+  footer {
+    padding: 5px 20px;
+    border-top: 1px solid var(--border);
+    background: var(--bg-panel);
+    display: flex;
+    justify-content: space-between;
+    font-size: 9px;
+    color: var(--text-dim);
+    letter-spacing: 2px;
+    flex-shrink: 0;
+  }
+
+  /* LEAFLET CUSTOM STYLES */
+  .leaflet-tile-pane { filter: invert(1) hue-rotate(180deg) brightness(0.65) saturate(0.6) contrast(0.9); }
+  .leaflet-popup-content-wrapper {
+    background: var(--bg-panel);
+    border: 1px solid var(--border-bright);
+    border-radius: 0;
+    color: var(--radar-green);
+    font-family: 'Share Tech Mono', monospace;
+    font-size: 11px;
+    box-shadow: 0 0 20px var(--radar-glow);
+  }
+  .leaflet-popup-tip { background: var(--border-bright); }
+  .leaflet-popup-close-button { color: var(--radar-green) !important; }
+
+  /* No-selection state */
+  .no-selection {
+    padding: 20px 16px;
+    font-size: 10px;
+    color: var(--text-dim);
+    letter-spacing: 1px;
+    line-height: 1.8;
+    text-align: center;
+  }
+
+  .no-selection::before {
+    content: '[ SELECT AIRCRAFT ]';
+    display: block;
+    font-size: 9px;
+    letter-spacing: 3px;
+    margin-bottom: 12px;
+    color: rgba(0,255,136,0.3);
+  }
+
+  /* data source toggle */
+  .source-toggle {
+    display: flex;
+    gap: 0;
+    border: 1px solid var(--border);
+    overflow: hidden;
+    pointer-events: all;
+  }
+  .src-btn {
+    padding: 4px 12px;
+    font-size: 9px;
+    letter-spacing: 2px;
+    background: transparent;
+    color: var(--text-dim);
+    border: none;
+    cursor: pointer;
+    font-family: 'Share Tech Mono', monospace;
+    transition: all 0.15s;
+  }
+  .src-btn.active {
+    background: var(--radar-glow);
+    color: var(--radar-green);
+  }
+  .src-btn:hover { color: var(--radar-green); }
+</style>
+</head>
+<body>
+
+<!-- HEADER -->
+<header>
+  <div class="header-left">
+    <div class="logo">ADS-B <span>RADAR</span></div>
+    <div class="status-pill">
+      <div class="dot-live"></div>
+      <span id="src-label">SIMULATION</span>
+    </div>
+    <div class="source-toggle">
+      <button class="src-btn active" data-src="sim" onclick="setSource('sim')">SIM</button>
+      <button class="src-btn" data-src="live" onclick="setSource('live')">LIVE</button>
+    </div>
+  </div>
+
+  <div class="header-stats">
+    <div class="hstat">
+      <div class="hstat-val" id="stat-count">0</div>
+      <div class="hstat-label">AIRCRAFT</div>
+    </div>
+    <div class="hstat">
+      <div class="hstat-val" id="stat-msgs">0</div>
+      <div class="hstat-label">UPDATES/S</div>
+    </div>
+    <div class="hstat">
+      <div class="hstat-val" id="stat-range">—</div>
+      <div class="hstat-label">MAX ALT (ft)</div>
+    </div>
+  </div>
+
+  <div class="utc-clock" id="utc-clock">00:00:00Z</div>
+</header>
+
+<!-- MAIN -->
+<div class="main">
+
+  <!-- LEFT: FLIGHT LIST -->
+  <div class="left-panel">
+    <div class="panel-title">
+      TRACKED FLIGHTS &nbsp;
+      <span id="list-count">0</span>
+    </div>
+    <div class="flight-list" id="flight-list">
+      <!-- populated by JS -->
+    </div>
+  </div>
+
+  <!-- MAP -->
+  <div class="map-wrapper">
+    <div id="map"></div>
+
+    <div class="map-overlay-tl">
+      KUWAIT ACC<br>
+      FIR: OKAC<br>
+      FREQ: 1090 MHz
+    </div>
+
+    <div class="map-overlay-tr" id="overlay-tr">
+      MODE: <span style="color:var(--radar-green)">SURVEILLANCE</span><br>
+      RANGE: 350 NM<br>
+      FILTER: ALL
+    </div>
+
+    <div class="map-overlay-bl" id="overlay-bl">
+      LAT: 29.37°N &nbsp; LON: 47.98°E
+    </div>
+
+    <div class="map-overlay-br">
+      © ADS-B TRACKER — KCST FYP<br>
+      POWERED BY RTL-SDR + DUMP1090
+    </div>
+  </div>
+
+  <!-- RIGHT: DETAIL PANEL -->
+  <div class="right-panel">
+    <div class="panel-title">AIRCRAFT DETAIL</div>
+
+    <div id="ac-detail-area">
+      <div class="no-selection">
+        Click any aircraft on the map or in the list to view detailed telemetry
+      </div>
+    </div>
+
+    <div class="compass-wrap" id="compass-wrap" style="display:none">
+      <div class="compass-label">HEADING / TRACK</div>
+      <div class="compass">
+        <svg viewBox="0 0 90 90">
+          <!-- Outer ring -->
+          <circle cx="45" cy="45" r="42" fill="none" stroke="rgba(0,255,136,0.2)" stroke-width="1"/>
+          <circle cx="45" cy="45" r="38" fill="none" stroke="rgba(0,255,136,0.08)" stroke-width="1"/>
+          <!-- Cardinal ticks -->
+          <line x1="45" y1="3" x2="45" y2="12" stroke="rgba(0,255,136,0.6)" stroke-width="1.5"/>
+          <line x1="87" y1="45" x2="78" y2="45" stroke="rgba(0,255,136,0.3)" stroke-width="1"/>
+          <line x1="45" y1="87" x2="45" y2="78" stroke="rgba(0,255,136,0.3)" stroke-width="1"/>
+          <line x1="3" y1="45" x2="12" y2="45" stroke="rgba(0,255,136,0.3)" stroke-width="1"/>
+          <!-- Labels -->
+          <text x="45" y="20" text-anchor="middle" fill="rgba(0,255,136,0.8)" font-family="Share Tech Mono" font-size="7">N</text>
+          <text x="72" y="49" text-anchor="middle" fill="rgba(0,255,136,0.4)" font-family="Share Tech Mono" font-size="6">E</text>
+          <text x="45" y="75" text-anchor="middle" fill="rgba(0,255,136,0.4)" font-family="Share Tech Mono" font-size="6">S</text>
+          <text x="18" y="49" text-anchor="middle" fill="rgba(0,255,136,0.4)" font-family="Share Tech Mono" font-size="6">W</text>
+          <!-- Needle -->
+          <line id="compass-needle"
+            x1="45" y1="45" x2="45" y2="10"
+            stroke="#00ff88" stroke-width="2"
+            stroke-linecap="round"
+            transform-origin="45 45"
+            style="filter: drop-shadow(0 0 4px #00ff88)"
+          />
+          <circle cx="45" cy="45" r="3" fill="#00ff88" style="filter: drop-shadow(0 0 6px #00ff88)"/>
+        </svg>
+      </div>
+    </div>
+
+    <div class="log-section">
+      <div class="panel-title">SYSTEM LOG <span id="log-count">0</span></div>
+      <div class="log-entries" id="log-entries"></div>
+    </div>
+  </div>
+</div>
+
+<!-- FOOTER -->
+<footer>
+  <span>SYSTEM: ONLINE &nbsp;|&nbsp; RTL-SDR: CONNECTED &nbsp;|&nbsp; DUMP1090: ACTIVE</span>
+  <span id="footer-time">LAST UPDATE: —</span>
+  <span>KCST · FYP · ADS-B TRACKER v2.0</span>
+</footer>
+
+<!-- ───────────────────────── SCRIPTS ───────────────────────── -->
+<script>
+
+// ── CONFIG ──────────────────────────────────────────────────
+const CONFIG = {
+  // Same-origin by default: the Flask server serves this page AND the API,
+  // so no host/port needs to be hardcoded here anymore.
+  sim_url:        '/planes',
+  live_url:       '/live',
+  flight_url:     '/api/flight/',   // server-side AviationStack proxy, no key in the browser
+  center:         [29.37, 47.98],
+  zoom:           7,
+  refresh:        1000
+};
+
+let currentSource = 'sim';
+let selectedHex = null;
+let planeMarkers = {};
+let planePaths   = {};
+let planeData    = {};
+let updateCount  = 0;
+let logCount     = 0;
+
+// ── MAP INIT ────────────────────────────────────────────────
+const map = L.map('map', {
+  zoomControl: true,
+  attributionControl: false
+}).setView(CONFIG.center, CONFIG.zoom);
+
+L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png').addTo(map);
+
+// update coords overlay on mouse move
+map.on('mousemove', e => {
+  document.getElementById('overlay-bl').innerHTML =
+    `LAT: ${e.latlng.lat.toFixed(4)}°N &nbsp; LON: ${e.latlng.lng.toFixed(4)}°E`;
+});
+
+// ── PLANE SVG ICON (real aircraft top-down shape) ────────────
+function makePlaneIcon(track, isSelected) {
+  const color  = isSelected ? '#ffffff' : '#00ff88';
+  const glow   = isSelected ? '0 0 10px #fff, 0 0 20px #fff' : '0 0 8px #00ff88, 0 0 16px #00aa55';
+  const shadow = isSelected ? 'drop-shadow(0 0 5px #fff)' : 'drop-shadow(0 0 4px #00ff88)';
+  // Real top-down aircraft path from plane.svg (scaled to 44x44 viewBox)
+  const planePath = `M2504 5083 c-69 -68 -128 -238 -159 -453 -15 -107 -34 -457 -38 -720
+l-2 -144 -265 -223 -265 -223 -5 130 c-4 101 -8 133 -20 140 -22 14 -184 12
+-198 -2 -9 -9 -12 -76 -12 -239 l0 -226 -232 -195 -233 -196 -3 129 c-3 129
+-3 130 -28 139 -33 13 -145 13 -178 0 l-26 -10 0 -227 0 -228 -358 -301 c-196
+-165 -367 -315 -380 -334 -40 -59 -54 -127 -59 -270 l-4 -135 29 32 c22 26
+113 70 432 212 223 99 411 181 419 183 8 2 17 -10 23 -29 11 -40 35 -43 44 -5
+16 73 17 75 115 119 52 23 97 42 102 42 4 1 7 -8 7 -18 0 -62 35 -68 50 -8 6
+23 12 47 14 52 3 8 118 63 191 91 7 3 17 -12 24 -36 17 -58 38 -51 51 18 l12
+59 366 162 c202 90 372 165 379 168 8 3 12 -143 16 -584 5 -619 11 -714 56
+-876 l19 -68 -317 -262 c-174 -143 -322 -268 -329 -277 -76 -89 -134 -226
+-148 -348 -11 -98 -18 -99 454 81 389 148 407 154 414 133 3 -11 18 -77 33
+-146 54 -252 76 -252 130 0 15 69 30 135 33 146 7 21 25 15 414 -133 472 -180
+465 -179 454 -81 -14 122 -72 259 -148 348 -7 9 -155 134 -329 277 l-317 262
+19 68 c45 162 51 257 56 876 4 441 8 587 16 584 7 -3 177 -78 379 -168 l366
+-162 12 -59 c13 -69 34 -76 51 -18 7 24 17 39 24 36 73 -28 188 -83 191 -91 2
+-5 8 -29 14 -52 15 -60 50 -54 50 8 0 10 3 19 8 18 4 0 49 -19 101 -42 98 -44
+99 -46 115 -119 9 -38 33 -35 44 5 6 19 15 31 23 29 8 -2 196 -84 419 -183
+319 -142 410 -186 432 -212 l29 -32 -4 135 c-5 139 -18 205 -56 267 -11 17
+-182 168 -380 335 l-361 303 0 227 c0 214 -1 228 -19 238 -25 13 -151 13 -185
+0 -25 -9 -25 -10 -28 -139 l-3 -129 -232 196 -233 195 0 226 c0 163 -3 230
+-12 239 -14 14 -176 16 -198 2 -12 -7 -16 -39 -20 -140 l-5 -130 -265 223
+-265 223 -2 144 c-4 263 -23 613 -38 720 -20 138 -58 280 -96 358 -35 71 -90
+132 -119 132 -11 0 -36 -16 -56 -37z`;
+
+  const svg = `<svg xmlns="http://www.w3.org/2000/svg"
+    viewBox="0 0 512 512" width="42" height="42"
+    style="transform:rotate(${track}deg); filter:${shadow}; transform-origin:center;">
+    <g transform="translate(0,512) scale(0.1,-0.1)">
+      <path d="${planePath}" fill="${color}" fill-opacity="0.95"/>
+    </g>
+  </svg>`;
+
+  return L.divIcon({
+    html: svg,
+    iconSize:   [42, 42],
+    iconAnchor: [21, 21],
+    className:  ''
+  });
+}
+
+// ── PARSE AIRCRAFT (handles both dump1090 and sim formats) ───
+function parseAircraft(raw) {
+  return {
+    hex:    (raw.hex || raw.icao || '??????').toUpperCase(),
+    flight: (raw.flight || raw.callsign || '').trim() || '——',
+    lat:    raw.lat ?? raw.latitude  ?? null,
+    lon:    raw.lon ?? raw.longitude ?? null,
+    alt:    raw.alt ?? raw.alt_baro  ?? raw.altitude ?? 0,  // always numeric, never undefined
+    speed:  raw.speed ?? raw.gs      ?? 0,
+    track:  raw.track ?? raw.true_heading ?? 0,
+  };
+}
+
+// ── UPDATE MARKERS ───────────────────────────────────────────
+function updateMap(aircraft) {
+  const seen = new Set();
+
+  aircraft.forEach(raw => {
+    const ac = parseAircraft(raw);
+    if (ac.lat === null || ac.lon === null) return;
+    seen.add(ac.hex);
+    planeData[ac.hex] = ac;
+
+    if (planeMarkers[ac.hex]) {
+      planeMarkers[ac.hex].setLatLng([ac.lat, ac.lon]);
+      planeMarkers[ac.hex].setIcon(makePlaneIcon(ac.track, ac.hex === selectedHex));
+    } else {
+      const marker = L.marker([ac.lat, ac.lon], {
+        icon: makePlaneIcon(ac.track, false),
+        zIndexOffset: 1000
+      }).addTo(map);
+
+      marker.on('click', () => selectAircraft(ac.hex));
+      planeMarkers[ac.hex] = marker;
+      planePaths[ac.hex] = [];
+      addLog(`CONTACT: ${ac.flight} [${ac.hex}] ALT:${ac.alt}ft`);
+    }
+
+    // trail dots
+    planePaths[ac.hex].push([ac.lat, ac.lon]);
+    if (planePaths[ac.hex].length > 80) planePaths[ac.hex].shift();
+
+    // draw trail — two layers: glow + solid line
+    if (planeMarkers[ac.hex]._trail)      map.removeLayer(planeMarkers[ac.hex]._trail);
+    if (planeMarkers[ac.hex]._trailGlow)  map.removeLayer(planeMarkers[ac.hex]._trailGlow);
+
+    if (planePaths[ac.hex].length > 1) {
+      const isSelected = ac.hex === selectedHex;
+      const trailColor = isSelected ? 'rgba(255,255,255,0.85)' : 'rgba(0,255,136,0.75)';
+      const glowColor  = isSelected ? 'rgba(255,255,255,0.2)'  : 'rgba(0,255,136,0.2)';
+
+      // glow layer (thick, transparent)
+      planeMarkers[ac.hex]._trailGlow = L.polyline(planePaths[ac.hex], {
+        color: glowColor,
+        weight: 6,
+        lineCap: 'round'
+      }).addTo(map);
+
+      // solid line on top
+      planeMarkers[ac.hex]._trail = L.polyline(planePaths[ac.hex], {
+        color: trailColor,
+        weight: 2,
+        dashArray: '6 5',
+        lineCap: 'round'
+      }).addTo(map);
+    }
+
+    // popup
+    planeMarkers[ac.hex].bindPopup(
+      `<b style="font-size:14px;letter-spacing:2px">${ac.flight}</b><br>` +
+      `HEX: ${ac.hex}<br>` +
+      `ALT: ${ac.alt.toLocaleString()} ft<br>` +
+      `SPD: ${ac.speed} kts<br>` +
+      `TRK: ${ac.track}°<br>` +
+      `POS: ${ac.lat.toFixed(4)}° / ${ac.lon.toFixed(4)}°`
+    );
+  });
+
+  // remove stale markers
+  Object.keys(planeMarkers).forEach(hex => {
+    if (!seen.has(hex)) {
+      map.removeLayer(planeMarkers[hex]);
+      if (planeMarkers[hex]._trail)     map.removeLayer(planeMarkers[hex]._trail);
+      if (planeMarkers[hex]._trailGlow) map.removeLayer(planeMarkers[hex]._trailGlow);
+      delete planeMarkers[hex];
+      delete planePaths[hex];
+      delete planeData[hex];
+    }
+  });
+
+  updateFlightList(aircraft.map(parseAircraft).filter(a => a.lat !== null));
+  updateStats(aircraft);
+  updateSelectedDetail();
+}
+
+// ── FLIGHT LIST ──────────────────────────────────────────────
+function updateFlightList(acs) {
+  const list = document.getElementById('flight-list');
+  document.getElementById('list-count').textContent = acs.length;
+
+  // sort by altitude desc
+  acs.sort((a, b) => b.alt - a.alt);
+
+  list.innerHTML = acs.map(ac => `
+    <div class="flight-item ${ac.hex === selectedHex ? 'selected' : ''}"
+         onclick="selectAircraft('${ac.hex}')">
+      <div>
+        <div class="fi-callsign">${ac.flight}</div>
+        <div class="fi-hex">${ac.hex}</div>
+      </div>
+      <div class="fi-alt">
+        <div class="fi-alt-val">${ac.alt.toLocaleString()}</div>
+        <div class="fi-speed">${ac.speed} kts</div>
+      </div>
+      <div class="fi-track">
+        <span>LAT ${ac.lat?.toFixed(3) ?? '—'}</span>
+        <span>LON ${ac.lon?.toFixed(3) ?? '—'}</span>
+        <span>TRK ${ac.track}°</span>
+      </div>
+    </div>
+  `).join('');
+}
+
+// ── AVIATIONSTACK — جلب تفاصيل الرحلة ───────────────────────
+const flightCache = {};
+
+async function fetchFlightDetails(callsign) {
+  if (!callsign || callsign === '——') return null;
+  if (flightCache[callsign]) return flightCache[callsign];
+
+  try {
+    const res  = await fetch(CONFIG.flight_url + encodeURIComponent(callsign.trim()));
+    if (!res.ok) return null;       // server has no AVIATIONSTACK_API_KEY configured, or lookup failed
+    const data = await res.json();
+    if (data && !data.error) {
+      flightCache[callsign] = data;
+      return data;
+    }
+  } catch(e) {}
+  return null;
+}
+
+// ── SELECT AIRCRAFT ──────────────────────────────────────────
+function selectAircraft(hex) {
+  selectedHex = hex;
+  // refresh icons
+  Object.keys(planeMarkers).forEach(h => {
+    const ac = planeData[h];
+    if (ac) planeMarkers[h].setIcon(makePlaneIcon(ac.track, h === hex));
+  });
+  updateSelectedDetail();
+  // pan to
+  if (planeData[hex]) {
+    map.panTo([planeData[hex].lat, planeData[hex].lon]);
+  }
+}
+
+async function updateSelectedDetail() {
+  const area = document.getElementById('ac-detail-area');
+  const cw   = document.getElementById('compass-wrap');
+
+  if (!selectedHex || !planeData[selectedHex]) {
+    area.innerHTML = `<div class="no-selection">Click any aircraft on the map or in the list to view detailed telemetry</div>`;
+    cw.style.display = 'none';
+    return;
+  }
+
+  const ac = planeData[selectedHex];
+  cw.style.display = 'flex';
+
+  // rotate compass needle
+  document.getElementById('compass-needle').setAttribute(
+    'transform', `rotate(${ac.track}, 45, 45)`
+  );
+
+  // اعرض البيانات الأساسية أول
+  renderDetail(ac, null);
+
+  // بعدين جيب من AviationStack في الخلفية
+  const info = await fetchFlightDetails(ac.flight);
+  renderDetail(ac, info);
+}
+
+function renderDetail(ac, info) {
+  const area = document.getElementById('ac-detail-area');
+
+  // ── بيانات AviationStack ──
+  const airline    = info?.airline?.name         || '——';
+  const acType     = info?.aircraft?.iata         || info?.aircraft?.icao || '——';
+  const acReg      = info?.aircraft?.registration || '——';
+  const depIata    = info?.departure?.iata         || '——';
+  const depName    = info?.departure?.airport      || '——';
+  const depSched   = info?.departure?.scheduled    ? info.departure.scheduled.slice(11,16) + 'Z' : '——';
+  const depActual  = info?.departure?.actual        ? info.departure.actual.slice(11,16) + 'Z'   : '——';
+  const arrIata    = info?.arrival?.iata            || '——';
+  const arrName    = info?.arrival?.airport         || '——';
+  const arrSched   = info?.arrival?.scheduled       ? info.arrival.scheduled.slice(11,16) + 'Z'  : '——';
+  const arrEst     = info?.arrival?.estimated       ? info.arrival.estimated.slice(11,16) + 'Z'  : '——';
+  const status     = info?.flight_status            || '——';
+
+  const statusColor = status === 'active' ? 'var(--radar-green)'
+                    : status === 'landed' ? 'var(--alert-yellow)'
+                    : status === 'delayed' ? 'var(--alert-red)'
+                    : 'var(--text-dim)';
+
+  area.innerHTML = `
+    <div class="ac-detail">
+
+      <!-- Callsign + Status -->
+      <div style="display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:6px">
+        <div>
+          <div class="ac-detail-callsign">${ac.flight}</div>
+          <div class="ac-detail-hex">ICAO: ${ac.hex}</div>
+        </div>
+        <div style="text-align:right;font-size:10px;letter-spacing:1px">
+          <div style="color:${statusColor};text-transform:uppercase;font-size:11px">${status}</div>
+          <div style="color:var(--text-dim);margin-top:2px">${acType}</div>
+          <div style="color:var(--text-dim)">${acReg}</div>
+        </div>
+      </div>
+
+      <!-- Airline -->
+      <div style="font-size:11px;color:var(--radar-green);letter-spacing:1px;
+                  border:1px solid var(--border);padding:5px 8px;margin-bottom:8px;
+                  background:var(--radar-glow)">
+        ✈ ${airline}
+      </div>
+
+      <!-- FROM / TO -->
+      <div style="display:grid;grid-template-columns:1fr 8px 1fr;gap:4px;margin-bottom:8px;align-items:center">
+        <div style="background:var(--bg-card);border:1px solid var(--border);padding:7px 8px">
+          <div style="font-size:8px;color:var(--text-dim);letter-spacing:2px;margin-bottom:3px">FROM 🛫</div>
+          <div style="font-size:20px;font-weight:700;text-shadow:0 0 8px var(--radar-green)">${depIata}</div>
+          <div style="font-size:9px;color:var(--text-dim);margin-top:2px;line-height:1.3">${depName.slice(0,18)}</div>
+          <div style="font-size:9px;color:var(--radar-green);margin-top:3px">SCH ${depSched}</div>
+          <div style="font-size:9px;color:var(--text-dim)">ACT ${depActual}</div>
+        </div>
+        <div style="text-align:center;color:var(--text-dim);font-size:10px">›</div>
+        <div style="background:var(--bg-card);border:1px solid var(--border);padding:7px 8px">
+          <div style="font-size:8px;color:var(--text-dim);letter-spacing:2px;margin-bottom:3px">TO 🛬</div>
+          <div style="font-size:20px;font-weight:700;text-shadow:0 0 8px var(--radar-green)">${arrIata}</div>
+          <div style="font-size:9px;color:var(--text-dim);margin-top:2px;line-height:1.3">${arrName.slice(0,18)}</div>
+          <div style="font-size:9px;color:var(--radar-green);margin-top:3px">SCH ${arrSched}</div>
+          <div style="font-size:9px;color:var(--text-dim)">EST ${arrEst}</div>
+        </div>
+      </div>
+
+      <!-- Telemetry grid -->
+      <div class="data-grid">
+        <div class="data-cell">
+          <div class="dc-label">ALTITUDE</div>
+          <div class="dc-value">${ac.alt.toLocaleString()}<span class="dc-unit"> ft</span></div>
+        </div>
+        <div class="data-cell">
+          <div class="dc-label">SPEED</div>
+          <div class="dc-value">${ac.speed}<span class="dc-unit"> kts</span></div>
+        </div>
+        <div class="data-cell">
+          <div class="dc-label">LATITUDE</div>
+          <div class="dc-value" style="font-size:13px">${ac.lat?.toFixed(4) ?? '—'}°</div>
+        </div>
+        <div class="data-cell">
+          <div class="dc-label">LONGITUDE</div>
+          <div class="dc-value" style="font-size:13px">${ac.lon?.toFixed(4) ?? '—'}°</div>
+        </div>
+        <div class="data-cell" style="grid-column:1/-1">
+          <div class="dc-label">TRACK</div>
+          <div class="dc-value">${ac.track}<span class="dc-unit">°</span></div>
+        </div>
+      </div>
+      ${!info ? '<div style="font-size:9px;color:var(--text-dim);text-align:center;margin-top:6px;letter-spacing:1px">NO ENRICHED FLIGHT DATA (set AVIATIONSTACK_API_KEY on the server)</div>' : ''}
+    </div>
+  `;
+}
+
+// ── STATS ────────────────────────────────────────────────────
+function updateStats(aircraft) {
+  document.getElementById('stat-count').textContent = aircraft.length;
+  document.getElementById('stat-msgs').textContent  = updateCount;
+  const maxAlt = aircraft.reduce((m, a) => Math.max(m, a.alt ?? 0), 0);
+  document.getElementById('stat-range').textContent = maxAlt ? maxAlt.toLocaleString() : '—';
+  updateCount = 0;
+
+  const now = new Date().toISOString().replace('T',' ').split('.')[0];
+  document.getElementById('footer-time').textContent = `LAST UPDATE: ${now}Z`;
+}
+
+// ── LOG ──────────────────────────────────────────────────────
+function addLog(msg, type='') {
+  logCount++;
+  const el    = document.getElementById('log-entries');
+  const count = document.getElementById('log-count');
+  const time  = new Date().toTimeString().slice(0,8);
+  const entry = document.createElement('div');
+  entry.className = `log-entry ${type}`;
+  entry.innerHTML = `<span class="log-time">${time}Z</span><span class="log-msg">${msg}</span>`;
+  el.insertBefore(entry, el.firstChild);
+  if (el.children.length > 80) el.removeChild(el.lastChild);
+  count.textContent = logCount;
+}
+
+// ── CLOCK ────────────────────────────────────────────────────
+function updateClock() {
+  const now = new Date();
+  const h = String(now.getUTCHours()).padStart(2,'0');
+  const m = String(now.getUTCMinutes()).padStart(2,'0');
+  const s = String(now.getUTCSeconds()).padStart(2,'0');
+  document.getElementById('utc-clock').textContent = `${h}:${m}:${s}Z`;
+}
+setInterval(updateClock, 1000);
+updateClock();
+
+// ── DATA SOURCE ──────────────────────────────────────────────
+function setSource(src) {
+  currentSource = src;
+  document.querySelectorAll('.src-btn').forEach(b => b.classList.toggle('active', b.dataset.src === src));
+  document.getElementById('src-label').textContent = src === 'live' ? 'LIVE · RTL-SDR' : 'SIMULATION';
+  addLog(`DATA SOURCE CHANGED → ${src.toUpperCase()}`, src === 'live' ? 'alert' : '');
+}
+
+// ── FETCH LOOP ───────────────────────────────────────────────
+async function fetchAircraft() {
+  const url = currentSource === 'live' ? CONFIG.live_url : CONFIG.sim_url;
+  try {
+    const res  = await fetch(url);
+    const data = await res.json();
+    // handle both formats
+    const list = data.aircraft || data || [];
+    updateCount++;
+    updateMap(list);
+  } catch(e) {
+    addLog(`FETCH ERROR: ${e.message}`, 'alert');
+  }
+}
+
+// startup log
+addLog('SYSTEM INITIALIZED — ADS-B TRACKER v2.0');
+addLog('ANTENNA: 1090 MHz / RTL-SDR ONLINE');
+addLog('AREA: KUWAIT FIR / OKAC');
+
+fetchAircraft();
+setInterval(fetchAircraft, CONFIG.refresh);
+
+</script>
+</body>
+</html>
