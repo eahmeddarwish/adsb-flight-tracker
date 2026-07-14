@@ -38,7 +38,7 @@ tags:
 </div>
 
 <!-- Add a real screenshot of the running dashboard here, e.g.: -->
-<!-- ![Radar dashboard](assets/screenshots/adsb-radar-screenshot.png) -->
+![Radar dashboard](assets/screenshots/adsb-radar-screenshot.png)
 
 ---
 
